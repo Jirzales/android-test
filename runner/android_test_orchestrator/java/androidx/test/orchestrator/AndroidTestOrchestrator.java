@@ -16,14 +16,7 @@
 
 package androidx.test.orchestrator;
 
-import static androidx.test.orchestrator.OrchestratorConstants.AJUR_CLASS_ARGUMENT;
-import static androidx.test.orchestrator.OrchestratorConstants.AJUR_COVERAGE;
-import static androidx.test.orchestrator.OrchestratorConstants.AJUR_COVERAGE_FILE;
-import static androidx.test.orchestrator.OrchestratorConstants.CLEAR_PKG_DATA;
-import static androidx.test.orchestrator.OrchestratorConstants.COVERAGE_FILE_PATH;
-import static androidx.test.orchestrator.OrchestratorConstants.ISOLATED_ARGUMENT;
-import static androidx.test.orchestrator.OrchestratorConstants.ORCHESTRATOR_DEBUG_ARGUMENT;
-import static androidx.test.orchestrator.OrchestratorConstants.TARGET_INSTRUMENTATION_ARGUMENT;
+import static androidx.test.orchestrator.OrchestratorConstants.*;
 import static com.google.common.base.Preconditions.checkState;
 
 import android.Manifest.permission;
@@ -299,10 +292,14 @@ public final class AndroidTestOrchestrator extends android.app.Instrumentation
       listenerManager.testProcessFinished(getOutputFile());
     }
 
-    if (runsInIsolatedMode(arguments)) {
-      executeNextTest();
+    if (runsInClassMode(arguments)) {
+      executeNextTestClass();
     } else {
-      executeEntireTestSuite();
+      if (runsInIsolatedMode(arguments)) {
+        executeNextTest();
+      } else {
+        executeEntireTestSuite();
+      }
     }
   }
 
@@ -318,6 +315,35 @@ public final class AndroidTestOrchestrator extends android.app.Instrumentation
     executorService.execute(
         TestRunnable.legacyTestRunnable(
             getContext(), getSecret(arguments), arguments, getOutputStream(), this));
+  }
+
+  private void executeNextTestClass() {
+    if (!testIterator.hasNext()) {
+      finish(Activity.RESULT_OK, createResultBundle());
+      return;
+    }
+
+    test = testIterator.next();
+    listenerManager.testProcessStarted(new ParcelableDescription(test));
+    String coveragePath = addTestCoverageSupport(arguments, test);
+    if (coveragePath != null) {
+      arguments.putString(AJUR_COVERAGE_FILE, coveragePath);
+    }
+
+    String className = test.substring(0, test.lastIndexOf(".") - 1);
+    className = test.substring(className.lastIndexOf(".") + 1);
+
+    if (arguments.getString("oldClass") != null && className != arguments.getString("oldClass")) {
+      clearPackageData();
+    }
+    arguments.putString("oldClass", className);
+
+    executorService.execute(
+            TestRunnable.singleTestRunnable(
+                    getContext(), getSecret(arguments), arguments, getOutputStream(), this, test));
+    if (coveragePath != null) {
+      arguments.remove(AJUR_COVERAGE_FILE);
+    }
   }
 
   private void executeNextTest() {
@@ -448,6 +474,11 @@ public final class AndroidTestOrchestrator extends android.app.Instrumentation
   public boolean onException(Object obj, Throwable e) {
     resultPrinter.reportProcessCrash(e);
     return super.onException(obj, e);
+  }
+
+  private static boolean runsInClassMode(Bundle arguments) {
+    // We run in isolated mode always, unless flag class mode is explicitly false.
+    return !(Boolean.FALSE.toString().equalsIgnoreCase(arguments.getString(CLASS_MODE)));
   }
 
   private static boolean runsInIsolatedMode(Bundle arguments) {
